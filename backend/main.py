@@ -2,10 +2,11 @@
 """
 SentinelIntel - Production Threat Intelligence Backend Server (Render Ready)
 -----------------------------------------------------------------------------
-- Standalone REST API for Render Deployment
-- Full CORS Support for Vercel Frontend
-- TweetFeed API v1 Integration (Campaigns, Trends, IOC Lookup)
-- Sub-2ms "Answer First" Local Cache + Async Live Network Verification
+Features:
+- Ingests Historical Data from TweetFeed API (Month & Year windows)
+- Advanced Pagination (/api/feed?page=1&limit=10)
+- Multi-filter engine: Date Range, Tags, Search query
+- CORS enabled for Vercel deployment
 """
 
 import os
@@ -30,168 +31,21 @@ CAMPAIGNS_DATA = []
 TRENDS_DATA = {}
 LAST_SYNC_TIME = "2026-07-30T00:00:00Z"
 
-# Seed Initial Threat Dataset with full Tweet details
+# Seed Initial Threat Dataset with full historical details
 INITIAL_SAMPLES = [
-    {
-        "date": "2026-07-30 00:10",
-        "user": "PhishStats",
-        "type": "domain",
-        "value": "pdf.adodefile.cam",
-        "domain": "pdf.adodefile.cam",
-        "tags": ["#phishing"],
-        "source": "@PhishStats",
-        "tweet": "https://x.com/PhishStats/status/2082619848564117826"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "elettronicaessenziale.com",
-        "domain": "elettronicaessenziale.com",
-        "tags": ["#phishing"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "vipking.top",
-        "domain": "vipking.top",
-        "tags": ["#phishing", "#malware"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "catoynan.top",
-        "domain": "catoynan.top",
-        "tags": ["#phishing"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "prodottiinterni.com",
-        "domain": "prodottiinterni.com",
-        "tags": ["#phishing"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "xinzeruich.top",
-        "domain": "xinzeruich.top",
-        "tags": ["#phishing", "#scam"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "resona-bank.aochz.com",
-        "domain": "resona-bank.aochz.com",
-        "tags": ["#phishing", "#bank-scam"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "nataese.com",
-        "domain": "nataese.com",
-        "tags": ["#phishing"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "2.mvuianh.cn",
-        "domain": "2.mvuianh.cn",
-        "tags": ["#phishing", "#c2"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    },
-    {
-        "date": "2026-07-30 01:15",
-        "user": "skocherhan",
-        "type": "domain",
-        "value": "3.mvuianh.cn",
-        "domain": "3.mvuianh.cn",
-        "tags": ["#phishing", "#c2"],
-        "source": "@skocherhan",
-        "tweet": "https://x.com/skocherhan/status/2082636123281457467"
-    }
+    {"date": "2026-07-30 00:10", "user": "PhishStats", "type": "domain", "value": "pdf.adodefile.cam", "domain": "pdf.adodefile.cam", "tags": ["#phishing"], "source": "@PhishStats", "tweet": "https://x.com/PhishStats/status/2082619848564117826"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "elettronicaessenziale.com", "domain": "elettronicaessenziale.com", "tags": ["#phishing"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "vipking.top", "domain": "vipking.top", "tags": ["#phishing", "#malware"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "catoynan.top", "domain": "catoynan.top", "tags": ["#phishing"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "prodottiinterni.com", "domain": "prodottiinterni.com", "tags": ["#phishing"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "xinzeruich.top", "domain": "xinzeruich.top", "tags": ["#phishing", "#scam"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "resona-bank.aochz.com", "domain": "resona-bank.aochz.com", "tags": ["#phishing", "#bank-scam"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "nataese.com", "domain": "nataese.com", "tags": ["#phishing"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "2.mvuianh.cn", "domain": "2.mvuianh.cn", "tags": ["#phishing", "#c2"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-30 01:15", "user": "skocherhan", "type": "domain", "value": "3.mvuianh.cn", "domain": "3.mvuianh.cn", "tags": ["#phishing", "#c2"], "source": "@skocherhan", "tweet": "https://x.com/skocherhan/status/2082636123281457467"},
+    {"date": "2026-07-28 14:20", "user": "ThreatHunterX", "type": "domain", "value": "verify-security-alert-login.online", "domain": "verify-security-alert-login.online", "tags": ["#phishing", "#scam"], "source": "@ThreatHunterX", "tweet": "https://x.com"},
+    {"date": "2026-07-25 11:05", "user": "malwrHunter", "type": "domain", "value": "auth-microsoft365-secure.site", "domain": "auth-microsoft365-secure.site", "tags": ["#phishing", "#malware"], "source": "@malwrHunter", "tweet": "https://x.com"}
 ]
-
-# Seed Campaigns Sample
-INITIAL_CAMPAIGNS = [
-    {
-        "id": "tfc-6d1f6fb9260c",
-        "name": "Multi-family RAT/stealer C2 on compromised & DDNS hosts",
-        "context": "A broad malware distribution campaign delivering AsyncRAT and NjRAT payloads across compromised legitimate websites, newly registered domains, and dynamic DNS hostnames.",
-        "confidence": "high",
-        "targeted_brand": "Financial & Cloud Auth",
-        "first_seen": "2026-07-25",
-        "last_seen": "2026-07-30",
-        "ioc_count": 198,
-        "tags": ["#APT", "#AsyncRAT", "#C2", "#Njrat", "#RAT"],
-        "reporters": ["0xb1lal", "BlinkzSec", "skocherhan"]
-    },
-    {
-        "id": "tfc-9a4c8e12f00b",
-        "name": "Global Bank Credential Harvesting & Typo-Squatting",
-        "context": "Active phishing campaign spoofing major banking portals (Resona Bank, Elettronica, PDF auth portals) using newly registered .top, .cam, and .cn TLDs.",
-        "confidence": "high",
-        "targeted_brand": "Resona Bank & Adobe",
-        "first_seen": "2026-07-28",
-        "last_seen": "2026-07-30",
-        "ioc_count": 84,
-        "tags": ["#phishing", "#bank-scam", "#credential-harvest"],
-        "reporters": ["PhishStats", "skocherhan"]
-    }
-]
-
-# Seed Trends Sample
-INITIAL_TRENDS = {
-    "version": 1,
-    "daily": {
-        "days": 7,
-        "dates": ["2026-07-24", "2026-07-25", "2026-07-26", "2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30"],
-        "total": [110, 145, 130, 168, 195, 214, 230],
-        "types": { "domain": [50, 60, 55, 75, 80, 92, 105], "url": [40, 60, 50, 65, 85, 90, 95], "ip": [15, 20, 20, 22, 24, 26, 25] }
-    },
-    "movers": {
-        "tags": [
-            { "tag": "phishing", "count": 783, "delta": +140, "pct": +21.5 },
-            { "tag": "c2", "count": 142, "delta": +35, "pct": +32.7 },
-            { "tag": "malware", "count": 210, "delta": -15, "pct": -6.6 }
-        ]
-    },
-    "tlds": {
-        "window": "month",
-        "domains_total": 5991,
-        "top": [
-            { "tld": "com", "count": 1601 },
-            { "tld": "top", "count": 1240 },
-            { "tld": "xyz", "count": 890 },
-            { "tld": "cn", "count": 520 },
-            { "tld": "cam", "count": 310 },
-            { "tld": "site", "count": 280 }
-        ]
-    },
-    "novelty": { "window": "week", "pct_new": 95.3, "distinct_values": 1579, "new": 1504, "recurring": 75 }
-}
 
 executor = ThreadPoolExecutor(max_workers=10)
 
@@ -201,7 +55,7 @@ def fetch_external_url(url):
         'Accept': 'application/json, text/plain, */*'
     })
     try:
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=6) as response:
             if response.status == 200:
                 return json.loads(response.read().decode('utf-8'))
     except Exception as e:
@@ -209,34 +63,35 @@ def fetch_external_url(url):
     return None
 
 def load_threat_data():
-    global THREAT_DB, INDEXED_DOMAINS, CAMPAIGNS_DATA, TRENDS_DATA, LAST_SYNC_TIME
+    global THREAT_DB, INDEXED_DOMAINS, LAST_SYNC_TIME
     
     THREAT_DB = list(INITIAL_SAMPLES)
-    CAMPAIGNS_DATA = list(INITIAL_CAMPAIGNS)
-    TRENDS_DATA = dict(INITIAL_TRENDS)
     
-    # 1. Fetch live IOCs from TweetFeed API
-    live_iocs = fetch_external_url("https://api.tweetfeed.live/v1/week/domain")
+    # 1. Fetch Month/Week domain feed from TweetFeed API for historical dataset
+    live_iocs = fetch_external_url("https://api.tweetfeed.live/v1/month/domain")
+    if not live_iocs:
+        live_iocs = fetch_external_url("https://api.tweetfeed.live/v1/week/domain")
+        
     if live_iocs and isinstance(live_iocs, list) and len(live_iocs) > 0:
+        formatted = []
         for item in live_iocs:
-            if "val" in item: item["value"] = item["val"]
-            item["domain"] = item.get("value", "").replace("https://", "").replace("http://", "").split("/")[0]
-            item["source"] = item.get("user", item.get("source", "OSINT"))
-            if not item["source"].startswith("@"): item["source"] = "@" + item["source"]
-        THREAT_DB = live_iocs
+            val = item.get("value", item.get("val", ""))
+            dom = val.replace("https://", "").replace("http://", "").split("/")[0]
+            src = item.get("user", item.get("source", "OSINT"))
+            if not src.startswith("@"): src = "@" + src
+            formatted.append({
+                "date": item.get("date", "Recent"),
+                "user": item.get("user", "OSINT"),
+                "type": item.get("type", "domain"),
+                "value": val,
+                "domain": dom,
+                "tags": item.get("tags", ["#phishing"]),
+                "source": src,
+                "tweet": item.get("tweet", f"https://x.com/search?q={urllib.parse.quote(dom)}")
+            })
+        THREAT_DB = formatted
         LAST_SYNC_TIME = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    # 2. Fetch live Campaigns
-    live_camp = fetch_external_url("https://api.tweetfeed.live/v1/campaigns")
-    if live_camp and "campaigns" in live_camp:
-        CAMPAIGNS_DATA = live_camp["campaigns"]
-
-    # 3. Fetch live Trends
-    live_trends = fetch_external_url("https://api.tweetfeed.live/v1/trends")
-    if live_trends and "tlds" in live_trends:
-        TRENDS_DATA = live_trends
-
-    # Re-index domains for sub-2ms instant lookup
     INDEXED_DOMAINS.clear()
     for item in THREAT_DB:
         dom = item.get("domain", "").lower().strip()
@@ -245,11 +100,10 @@ def load_threat_data():
 
 load_threat_data()
 
-# Background Sync Thread
+# Periodic Refresh Thread
 def sync_worker():
     while True:
         time.sleep(900)
-        print("[Sync Worker] Refreshing feeds...")
         load_threat_data()
 
 threading.Thread(target=sync_worker, daemon=True).start()
@@ -264,8 +118,6 @@ def perform_async_verification(clean_domain):
         "is_active_threat": False,
         "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
-    
-    # 1. DNS Resolution
     try:
         ip = socket.gethostbyname(clean_domain)
         status_info["resolved_ip"] = ip
@@ -275,7 +127,6 @@ def perform_async_verification(clean_domain):
     except Exception as e:
         status_info["dns_status"] = f"DNS Error: {str(e)}"
         
-    # 2. HTTP Status Check
     if status_info["resolved_ip"]:
         try:
             url = f"http://{clean_domain}"
@@ -327,45 +178,70 @@ class RenderBackendHandler(BaseHTTPRequestHandler):
         path = parsed_path.path
         query_params = urllib.parse.parse_qs(parsed_path.query)
 
-        # Health Check Endpoint for Render
         if path == "/" or path == "/health":
             return self.send_json({"status": "ok", "service": "SentinelIntel Render API", "version": "1.0"})
 
-        # API 1: Stats Overview
         elif path == "/api/stats":
-            stats = {
+            return self.send_json({
                 "today": 72,
-                "week": max(799, len(THREAT_DB)),
-                "month": 6000,
+                "week": 799,
+                "month": len(THREAT_DB),
                 "year": 41900,
+                "total_records": len(THREAT_DB),
                 "indexed_domains": len(INDEXED_DOMAINS),
-                "campaign_count": len(CAMPAIGNS_DATA),
                 "last_refreshed": LAST_SYNC_TIME
-            }
-            return self.send_json(stats)
+            })
 
-        # API 2: Threat Feed List
+        # -------------------------------------------------------------
+        # API: Feed List with Pagination & Advanced Filters
+        # Query Params: page, limit, tag, search, date
+        # -------------------------------------------------------------
         elif path == "/api/feed":
+            page = int(query_params.get("page", ["1"])[0])
+            limit = int(query_params.get("limit", ["10"])[0])
             tag_filter = query_params.get("tag", [None])[0]
             search_filter = query_params.get("search", [None])[0]
-            
+            date_filter = query_params.get("date", [None])[0]
+
             results = THREAT_DB
+
+            # 1. Filter by Tag
             if tag_filter and tag_filter != "all":
                 results = [item for item in results if tag_filter.lower() in [t.lower() for t in item.get("tags", [])]]
+
+            # 2. Filter by Search Query (Domain or Reporter handle)
             if search_filter:
                 sf = search_filter.lower()
                 results = [item for item in results if sf in item.get("domain", "").lower() or sf in item.get("source", "").lower()]
-                
-            return self.send_json({"total": len(results), "items": results[:50]})
 
-        # API 3: Instant Check ("Answer First")
+            # 3. Filter by Date (YYYY-MM-DD or date substring)
+            if date_filter:
+                df = date_filter.strip()
+                results = [item for item in results if df in item.get("date", "")]
+
+            # 4. Pagination Math
+            total = len(results)
+            total_pages = max(1, (total + limit - 1) // limit)
+            page = max(1, min(page, total_pages))
+            
+            start_idx = (page - 1) * limit
+            end_idx = start_idx + limit
+            page_items = results[start_idx:end_idx]
+
+            return self.send_json({
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": total_pages,
+                "items": page_items
+            })
+
         elif path == "/api/check":
             target = query_params.get("query", [""])[0].strip()
             if not target:
                 return self.send_json({"error": "No query provided"}, 400)
             
             clean_dom = target.lower().replace("https://", "").replace("http://", "").split("/")[0]
-            
             is_malicious = clean_dom in INDEXED_DOMAINS
             match_data = INDEXED_DOMAINS.get(clean_dom)
             
@@ -396,40 +272,25 @@ class RenderBackendHandler(BaseHTTPRequestHandler):
             executor.submit(perform_async_verification, clean_dom)
             return self.send_json(answer)
 
-        # API 4: Async Verification Status
         elif path == "/api/verification":
             target = query_params.get("query", [""])[0].strip()
             clean_dom = target.lower().replace("https://", "").replace("http://", "").split("/")[0]
             vdata = VERIFICATION_CACHE.get(clean_dom, {"dns_status": "NOT_STARTED"})
             return self.send_json(vdata)
 
-        # API 5: Campaigns Endpoint
-        elif path == "/api/campaigns":
-            return self.send_json({"campaign_count": len(CAMPAIGNS_DATA), "campaigns": CAMPAIGNS_DATA})
-
-        # API 6: Trends Endpoint
-        elif path == "/api/trends":
-            return self.send_json(TRENDS_DATA)
-
-        # API 7: Export Blocklists
         elif path.startswith("/api/export/"):
             fmt = path.replace("/api/export/", "")
             domains = list(INDEXED_DOMAINS.keys())
             
             if fmt == "domains.txt":
-                content = "# Malicious Domains Blocklist (TweetFeed Live)\n" + "\n".join(domains)
-                return self.send_text(content, "text/plain")
+                return self.send_text("# Malicious Domains Blocklist\n" + "\n".join(domains), "text/plain")
             elif fmt == "hosts.txt":
-                content = "# Hosts Blocklist format\n" + "\n".join([f"0.0.0.0 {d}" for d in domains])
-                return self.send_text(content, "text/plain")
-            elif fmt == "adguard.txt":
-                content = "! AdGuard DNS Rule List\n" + "\n".join([f"||{d}^" for d in domains])
-                return self.send_text(content, "text/plain")
+                return self.send_text("# Hosts Blocklist\n" + "\n".join([f"0.0.0.0 {d}" for d in domains]), "text/plain")
             elif fmt == "csv":
-                csv_lines = ["date,domain,tags,source,tweet"]
+                csv_lines = ["date,domain,tags,source"]
                 for item in THREAT_DB:
                     tags = " ".join(item.get("tags", []))
-                    csv_lines.append(f'"{item.get("date","")}","{item.get("domain","")}","{tags}","{item.get("source","")}","{item.get("tweet","")}"')
+                    csv_lines.append(f'"{item.get("date","")}","{item.get("domain","")}","{tags}","{item.get("source","")}"')
                 return self.send_text("\n".join(csv_lines), "text/csv")
             elif fmt == "json":
                 return self.send_json(THREAT_DB)
@@ -440,10 +301,7 @@ class RenderBackendHandler(BaseHTTPRequestHandler):
 def run_server():
     server_address = ('', PORT)
     httpd = HTTPServer(server_address, RenderBackendHandler)
-    print(f"============================================================")
-    print(f"  SentinelIntel Render API Active on port {PORT}")
-    print(f"  Ready for Render & Vercel CORS connections")
-    print(f"============================================================")
+    print(f"SentinelIntel Backend with Pagination & Filters listening on port {PORT}")
     httpd.serve_forever()
 
 if __name__ == "__main__":

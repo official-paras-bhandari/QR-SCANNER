@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { 
   ShieldCheck, Camera, Search, Loader2, AlertTriangle, ExternalLink, 
-  Globe, Tag, User, Clock, ShieldAlert, Filter, CheckCircle2, ChevronRight
+  Globe, Tag, User, Clock, ShieldAlert, Calendar, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { QrScanner } from "@/components/qr-scanner";
@@ -12,8 +12,8 @@ import { analyzeUrlAsync, type SafetyReport } from "@/lib/url-safety";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "QR Safety Checker — Live TweetFeed Security" },
-      { name: "description", content: "Scan QR codes and verify links against live Twitter/X threat intelligence feeds." },
+      { title: "QR Safety Checker — Live TweetFeed Security & Historical Archive" },
+      { name: "description", content: "Scan QR codes and verify links against live and historical Twitter/X threat intelligence feeds." },
     ],
   }),
   component: Index,
@@ -27,46 +27,63 @@ interface FeedItem {
   tweet?: string;
 }
 
+const API_BASE_URL = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  ? "http://localhost:8000"
+  : (import.meta.env.VITE_API_URL || "https://api.tweetfeed.live");
+
 function Index() {
   const [scanning, setScanning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [manualInput, setManualInput] = useState("");
   const [report, setReport] = useState<SafetyReport | null>(null);
-  const [recentFeed, setRecentFeed] = useState<FeedItem[]>([]);
+
+  // Pagination & Filter States
+  const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
+  const [page, setPage] = useState<number>(1);
+  const [limit, setLimit] = useState<number>(5);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [totalRecords, setTotalRecords] = useState<number>(0);
   const [selectedTag, setSelectedTag] = useState<string>("all");
   const [feedSearch, setFeedSearch] = useState<string>("");
+  const [dateFilter, setDateFilter] = useState<string>("");
   const [showFullFeed, setShowFullFeed] = useState<boolean>(false);
 
-  // Fetch live malicious domain feed on load
-  useEffect(() => {
-    fetch("http://localhost:8000/api/feed")
+  // Fetch paginated and filtered historical feed from API
+  const fetchFeedData = () => {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+      tag: selectedTag,
+      search: feedSearch,
+      date: dateFilter
+    });
+
+    fetch(`${API_BASE_URL}/api/feed?${params.toString()}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.items) {
-          setRecentFeed(data.items);
+          setFeedItems(data.items);
+          setTotalPages(data.total_pages || 1);
+          setTotalRecords(data.total || data.items.length);
         }
       })
       .catch(() => {
-        setRecentFeed([
+        // Local Fallback
+        setFeedItems([
           { domain: "resona-bank.aochz.com", tags: ["#phishing", "#bank-scam"], source: "@skocherhan", date: "2026-07-30 01:15", tweet: "https://x.com" },
           { domain: "pdf.adodefile.cam", tags: ["#phishing"], source: "@PhishStats", date: "2026-07-30 00:10", tweet: "https://x.com" },
           { domain: "vipking.top", tags: ["#phishing", "#malware"], source: "@skocherhan", date: "2026-07-30 01:15", tweet: "https://x.com" },
           { domain: "elettronicaessenziale.com", tags: ["#phishing"], source: "@skocherhan", date: "2026-07-30 01:15", tweet: "https://x.com" },
           { domain: "catoynan.top", tags: ["#phishing"], source: "@skocherhan", date: "2026-07-30 01:15", tweet: "https://x.com" },
-          { domain: "2.mvuianh.cn", tags: ["#c2", "#phishing"], source: "@skocherhan", date: "2026-07-30 01:15", tweet: "https://x.com" },
-          { domain: "3.mvuianh.cn", tags: ["#c2", "#phishing"], source: "@skocherhan", date: "2026-07-30 01:15", tweet: "https://x.com" },
         ]);
+        setTotalPages(1);
+        setTotalRecords(5);
       });
-  }, []);
+  };
 
-  // Filter feed items by tag and search query
-  const filteredFeed = useMemo(() => {
-    return recentFeed.filter((item) => {
-      const matchesTag = selectedTag === "all" || (item.tags || []).some((t) => t.toLowerCase().includes(selectedTag.toLowerCase()));
-      const matchesSearch = !feedSearch || item.domain.toLowerCase().includes(feedSearch.toLowerCase()) || item.source.toLowerCase().includes(feedSearch.toLowerCase());
-      return matchesTag && matchesSearch;
-    });
-  }, [recentFeed, selectedTag, feedSearch]);
+  useEffect(() => {
+    fetchFeedData();
+  }, [page, limit, selectedTag, feedSearch, dateFilter]);
 
   const handleProcessUrl = async (value: string) => {
     setLoading(true);
@@ -91,8 +108,6 @@ function Index() {
     if (t.includes("scam")) return "bg-amber-500/10 text-amber-500 border-amber-500/20";
     return "bg-blue-500/10 text-blue-400 border-blue-500/20";
   };
-
-  const displayedItems = showFullFeed ? filteredFeed : filteredFeed.slice(0, 5);
 
   return (
     <main className="min-h-screen bg-background">
@@ -150,20 +165,25 @@ function Index() {
               </div>
             </div>
 
-            {/* Organized Live Threat Feed Section */}
+            {/* Organized Live Threat Feed & Historical Archive Section */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                   <ShieldAlert className="h-4 w-4 text-destructive" />
-                  Live Bad Domains ({filteredFeed.length})
+                  Historical Bad Domains ({totalRecords})
                 </h3>
                 <Button 
                   variant="ghost" 
                   size="sm" 
                   className="h-7 text-xs text-primary hover:text-primary/80"
-                  onClick={() => setShowFullFeed(!showFullFeed)}
+                  onClick={() => {
+                    const newShow = !showFullFeed;
+                    setShowFullFeed(newShow);
+                    setLimit(newShow ? 10 : 5);
+                    setPage(1);
+                  }}
                 >
-                  {showFullFeed ? "Show Less" : "View All"} <ChevronRight className={`ml-1 h-3.5 w-3.5 transition-transform ${showFullFeed ? "rotate-90" : ""}`} />
+                  {showFullFeed ? "Compact View" : "Full Archive View"}
                 </Button>
               </div>
 
@@ -172,7 +192,7 @@ function Index() {
                 {["all", "phishing", "malware", "scam", "c2"].map((tag) => (
                   <button
                     key={tag}
-                    onClick={() => setSelectedTag(tag)}
+                    onClick={() => { setSelectedTag(tag); setPage(1); }}
                     className={`px-2.5 py-1 rounded-full font-medium transition-all ${
                       selectedTag === tag
                         ? "bg-primary text-primary-foreground shadow-sm"
@@ -184,28 +204,38 @@ function Index() {
                 ))}
               </div>
 
-              {/* Filter Search Input (Shown when expanded or searching) */}
-              {showFullFeed && (
-                <div className="relative mb-2">
+              {/* Date Filter & Search Bar */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="relative">
                   <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                   <input
                     type="text"
-                    placeholder="Filter domains or reporters..."
+                    placeholder="Search domain..."
                     value={feedSearch}
-                    onChange={(e) => setFeedSearch(e.target.value)}
-                    className="w-full rounded-lg border bg-background pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                    onChange={(e) => { setFeedSearch(e.target.value); setPage(1); }}
+                    className="w-full rounded-lg border bg-background pl-8 pr-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                 </div>
-              )}
+                <div className="relative">
+                  <Calendar className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Filter date (YYYY-MM-DD)..."
+                    value={dateFilter}
+                    onChange={(e) => { setDateFilter(e.target.value); setPage(1); }}
+                    className="w-full rounded-lg border bg-background pl-8 pr-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+              </div>
 
-              {/* Organized Feed List Cards */}
+              {/* Feed List Cards */}
               <div className="space-y-2.5">
-                {displayedItems.length === 0 ? (
+                {feedItems.length === 0 ? (
                   <div className="rounded-xl border bg-card/40 p-4 text-center text-xs text-muted-foreground">
-                    No bad domains found matching "{selectedTag}".
+                    No bad domains found for selected filters.
                   </div>
                 ) : (
-                  displayedItems.map((item, idx) => (
+                  feedItems.map((item, idx) => (
                     <div key={idx} className="rounded-xl border bg-card/70 p-3.5 text-xs shadow-xs space-y-2 hover:border-primary/40 transition-colors">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 min-w-0">
@@ -249,6 +279,33 @@ function Index() {
                   ))
                 )}
               </div>
+
+              {/* Pagination Controls */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
+                  <span>Page <strong>{page}</strong> of <strong>{totalPages}</strong></span>
+                  <div className="flex gap-2">
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="h-7 px-2.5 text-xs" 
+                      disabled={page <= 1}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5 mr-1" /> Prev
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="h-7 px-2.5 text-xs" 
+                      disabled={page >= totalPages}
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    >
+                      Next <ChevronRight className="h-3.5 w-3.5 ml-1" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

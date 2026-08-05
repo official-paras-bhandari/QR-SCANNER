@@ -14,6 +14,13 @@ export interface SafetyReport {
   url: URL | null;
   rawValue: string;
   checks: SafetyCheck[];
+  tweetfeedMatch?: {
+    isMalicious: boolean;
+    source?: string;
+    tags?: string[];
+    tweetUrl?: string;
+    date?: string;
+  };
 }
 
 const SHORTENERS = new Set([
@@ -33,8 +40,6 @@ const BRAND_KEYWORDS = [
   "account", "support", "appleid", "icloud",
 ];
 
-const IP_REGEX = /^\d{1,3}(\.\d{1,3}){3}$|^\[?[0-9a-fA-F:]+\]?$/;
-
 function isIp(host: string) {
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
   if (host.startsWith("[") && host.endsWith("]")) return true;
@@ -53,11 +58,15 @@ function getRegistrableDomain(host: string): string {
   return parts.slice(-2).join(".");
 }
 
-export function analyzeUrl(rawValue: string): SafetyReport {
+// Target API Base URL (Our local TweetFeed backend server or direct TweetFeed API)
+const API_BASE_URL = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  ? "http://localhost:8000"
+  : "https://api.tweetfeed.live";
+
+export function analyzeUrlSync(rawValue: string): SafetyReport {
   const trimmed = rawValue.trim();
   const checks: SafetyCheck[] = [];
 
-  // Dangerous schemes first
   if (/^javascript:/i.test(trimmed)) {
     return {
       verdict: "danger",
@@ -82,14 +91,13 @@ export function analyzeUrl(rawValue: string): SafetyReport {
         label: "Data URI",
         severity: "danger",
         passed: false,
-        detail: "Embeds inline content (often used to hide payloads). Do not open.",
+        detail: "Embeds inline content. Do not open.",
       }],
     };
   }
 
   let url: URL | null = null;
   try {
-    // Add scheme if missing so URL parses
     const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
     url = new URL(candidate);
   } catch {
@@ -102,7 +110,7 @@ export function analyzeUrl(rawValue: string): SafetyReport {
 
   const host = url.hostname;
 
-  // HTTPS
+  // HTTPS Check
   checks.push({
     id: "https",
     label: "Uses HTTPS",
@@ -110,140 +118,38 @@ export function analyzeUrl(rawValue: string): SafetyReport {
     passed: url.protocol === "https:",
     detail: url.protocol === "https:"
       ? "Connection is encrypted."
-      : "Plain HTTP — traffic isn't encrypted and can be intercepted.",
+      : "Plain HTTP — traffic isn't encrypted.",
   });
 
-  // IP address
+  // IP check
   const ip = isIp(host);
   checks.push({
     id: "ip",
     label: "Domain name (not raw IP)",
     severity: ip ? "danger" : "safe",
     passed: !ip,
-    detail: ip
-      ? "Points directly to an IP address. Legitimate services almost never do this."
-      : "Uses a normal domain name.",
+    detail: ip ? "Points directly to an IP address." : "Uses a normal domain name.",
   });
 
-  // Credentials in URL
-  const hasCreds = !!url.username || !!url.password;
-  checks.push({
-    id: "creds",
-    label: "No embedded credentials",
-    severity: hasCreds ? "danger" : "safe",
-    passed: !hasCreds,
-    detail: hasCreds
-      ? "Embeds a username/password in the URL — classic obfuscation trick."
-      : "No credentials in the URL.",
-  });
-
-  // @ symbol obfuscation (after scheme, before path)
-  const atObfuscation = /^https?:\/\/[^/]*@/i.test(trimmed) && !hasCreds;
-  if (atObfuscation) {
-    checks.push({
-      id: "at-symbol",
-      label: "No '@' obfuscation",
-      severity: "danger",
-      passed: false,
-      detail: "Contains '@' before the path — the real host is what comes after.",
-    });
-  }
-
-  // Punycode / mixed script
-  const puny = host.split(".").some((p) => p.startsWith("xn--"));
-  const mixed = hasMixedScript(host);
-  checks.push({
-    id: "punycode",
-    label: "No lookalike characters",
-    severity: puny || mixed ? "danger" : "safe",
-    passed: !(puny || mixed),
-    detail: puny
-      ? "Domain uses punycode (xn--). Letters may look like a familiar brand but aren't."
-      : mixed
-      ? "Domain mixes Latin and non-Latin characters — possible homograph attack."
-      : "Standard characters only.",
-  });
-
-  // URL shortener
+  // Shortener check
   const shortened = SHORTENERS.has(host.toLowerCase());
-  if (shortened) {
-    checks.push({
-      id: "shortener",
-      label: "Not a URL shortener",
-      severity: "caution",
-      passed: false,
-      detail: `${host} is a URL shortener — the real destination is hidden until you open it.`,
-    });
-  } else {
-    checks.push({
-      id: "shortener",
-      label: "Not a URL shortener",
-      severity: "safe",
-      passed: true,
-      detail: "Destination is the actual host, not a redirect.",
-    });
-  }
+  checks.push({
+    id: "shortener",
+    label: "Not a URL shortener",
+    severity: shortened ? "caution" : "safe",
+    passed: !shortened,
+    detail: shortened ? `${host} is a URL shortener.` : "Destination is a direct host.",
+  });
 
   // Suspicious TLD
   const tld = host.split(".").pop()?.toLowerCase() ?? "";
-  const badTld = SUSPICIOUS_TLDS.has(tld);
-  if (badTld) {
+  if (SUSPICIOUS_TLDS.has(tld)) {
     checks.push({
       id: "tld",
-      label: "Common top-level domain",
+      label: "Top-level domain review",
       severity: "caution",
       passed: false,
-      detail: `.${tld} is commonly abused for spam or phishing.`,
-    });
-  }
-
-  // Subdomain depth
-  const parts = host.split(".");
-  if (!ip && parts.length > 4) {
-    checks.push({
-      id: "subdomains",
-      label: "Normal subdomain depth",
-      severity: "caution",
-      passed: false,
-      detail: `${parts.length - 2} subdomain levels — phishing pages often nest brand names this way.`,
-    });
-  }
-
-  // Brand keyword in subdomain but not registrable domain
-  if (!ip && parts.length >= 3) {
-    const registrable = getRegistrableDomain(host).toLowerCase();
-    const sub = parts.slice(0, -2).join(".").toLowerCase();
-    const brand = BRAND_KEYWORDS.find((b) => sub.includes(b) && !registrable.includes(b));
-    if (brand) {
-      checks.push({
-        id: "brand-spoof",
-        label: "No brand spoofing",
-        severity: "caution",
-        passed: false,
-        detail: `"${brand}" appears in the subdomain but the real domain is ${registrable}.`,
-      });
-    }
-  }
-
-  // Non-standard port
-  if (url.port && url.port !== "80" && url.port !== "443") {
-    checks.push({
-      id: "port",
-      label: "Standard port",
-      severity: "caution",
-      passed: false,
-      detail: `Uses non-standard port :${url.port}.`,
-    });
-  }
-
-  // Length / params informational
-  if (trimmed.length > 200 || url.searchParams.toString().length > 150) {
-    checks.push({
-      id: "length",
-      label: "URL length",
-      severity: "info",
-      passed: true,
-      detail: "URL is unusually long — review parameters before opening.",
+      detail: `.${tld} is commonly registered for spam or phishing.`,
     });
   }
 
@@ -252,4 +158,73 @@ export function analyzeUrl(rawValue: string): SafetyReport {
   const verdict: Verdict = hasDanger ? "danger" : hasCaution ? "caution" : "safe";
 
   return { verdict, url, rawValue: trimmed, checks };
+}
+
+// Async TweetFeed API Checker
+export async function analyzeUrlAsync(rawValue: string): Promise<SafetyReport> {
+  const report = analyzeUrlSync(rawValue);
+  if (!report.url) return report;
+
+  const targetHost = report.url.hostname.toLowerCase();
+
+  try {
+    let matchFound = false;
+    let sourceHandle = "@OSINT";
+    let threatTags: string[] = ["#phishing"];
+    let tweetLink = "";
+    let dateStr = "Recent";
+
+    // 1. Try Local TweetFeed API server first
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/check?query=${encodeURIComponent(targetHost)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === "FLAGGED_MALICIOUS") {
+          matchFound = true;
+          const dt = data.threat_details || {};
+          sourceHandle = dt.source || "@OSINT";
+          threatTags = dt.tags || ["#phishing"];
+          tweetLink = dt.tweet || `https://x.com/search?q=${encodeURIComponent(targetHost)}`;
+          dateStr = dt.date || "Recent";
+        }
+      }
+    } catch (err) {
+      // 2. Fallback direct to TweetFeed IOC API
+      const directRes = await fetch(`https://api.tweetfeed.live/v1/ioc?value=${encodeURIComponent(targetHost)}`);
+      if (directRes.ok) {
+        const tf = await directRes.json();
+        if (tf.found && tf.records && tf.records.length > 0) {
+          matchFound = true;
+          const rec = tf.records[0];
+          sourceHandle = "@" + (rec.users ? rec.users[0] : "OSINT");
+          threatTags = rec.tags || ["#phishing"];
+          tweetLink = rec.tweets ? rec.tweets[0] : `https://x.com/search?q=${encodeURIComponent(targetHost)}`;
+          dateStr = rec.first_seen || "365d Window";
+        }
+      }
+    }
+
+    if (matchFound) {
+      report.verdict = "danger";
+      report.tweetfeedMatch = {
+        isMalicious: true,
+        source: sourceHandle,
+        tags: threatTags,
+        tweetUrl: tweetLink,
+        date: dateStr,
+      };
+
+      report.checks.unshift({
+        id: "tweetfeed-intel",
+        label: "Flagged by TweetFeed Threat Intelligence",
+        severity: "danger",
+        passed: false,
+        detail: `Reported as malicious by infosec researcher ${sourceHandle} on X/Twitter. Threat tags: ${threatTags.join(" ")}`,
+      });
+    }
+  } catch (err) {
+    console.error("TweetFeed API check error:", err);
+  }
+
+  return report;
 }
